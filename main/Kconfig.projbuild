@@ -1,0 +1,31 @@
+menu "OpenCode Go Usage Display"
+
+    config OPENCODE_API_KEY
+        string "OpenCode Go API Key"
+        help
+            OpenCode Go 套餐的 API Key。
+            可从本机 opencode 的 auth.json 中获取:
+                %USERPROFILE%\.local\share\opencode\auth.json
+            其中 "opencode-go" 配置项的 "key" 字段即为该值。
+
+    config OPENCODE_WIFI_SSID
+        string "WiFi SSID"
+        default ""
+
+    config OPENCODE_WIFI_PASSWORD
+        string "WiFi Password"
+        default ""
+
+    config OPENCODE_REFRESH_MINUTES
+        int "Auto refresh interval (minutes)"
+        default 30
+        help
+            自动刷新用量的间隔(分钟)。0 表示不自动刷新,仅手动触摸刷新。
+
+    config OPENCODE_WIFI_RETRY_COUNT
+        int "WiFi connect retry count"
+        default 10
+        help
+            WiFi 连接失败后的重试次数(每次间隔 3 秒)。
+
+endmenu

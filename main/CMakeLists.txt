@@ -1,0 +1,27 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "lcd_init.c"
+        "touch_ft6336.c"
+        "wifi_app.c"
+        "usage_api.c"
+        "usage_ui.c"
+        "lv_font_zh16.c"
+        "lv_font_zh40.c"
+    INCLUDE_DIRS "."
+    PRIV_REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_netif
+        esp_event
+        esp_lcd
+        esp_driver_spi
+        esp_driver_i2c
+        esp_driver_ledc
+        esp_timer
+        esp_http_client
+        esp-tls
+        mbedtls
+        json
+        lvgl
+)
