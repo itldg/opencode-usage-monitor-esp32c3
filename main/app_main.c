@@ -22,39 +22,38 @@
 #define LOOP_DELAY_MS          5
 #define TOUCH_DEBOUNCE_MS      5000   /* 触摸触发刷新后的防抖 */
 #define WIFI_RETRY_PERIOD_MS   60000  /* WiFi 未连接时的自动重试周期 */
-#define SNTP_WAIT_MS           3000   /* 首次 NTP 同步等待(不阻塞 UI 太久) */
 
 static usage_quota_t s_quota;
 static bool s_time_synced = false;
 static bool s_sntp_initialized = false;
+static bool s_time_ui_updated = false;
 static bool s_touch_pressed = false;
 static lv_point_t s_touch_start;
 
-/* 初始化 SNTP 并尝试同步时间(超时 wait_ms,不在此阻塞太久) */
-static void sntp_try_sync(int wait_ms)
+/* SNTP 后台同步成功回调(置位后由主循环补显示时间) */
+static void sntp_sync_cb(struct timeval *tv)
 {
-    if (s_time_synced) return;
-    if (!s_sntp_initialized) {
-        esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("ntp.aliyun.com");
-        esp_err_t err = esp_netif_sntp_init(&cfg);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "SNTP init failed: %s", esp_err_to_name(err));
-            return;
-        }
+    s_time_synced = true;
+    ESP_LOGI(TAG, "SNTP time synced (cb)");
+}
+
+/* 确保 SNTP 已在后台运行;不阻塞等待,同步完成由 sync_cb 通知 */
+static void sntp_ensure(void)
+{
+    if (s_sntp_initialized) return;
+    esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("ntp.aliyun.com");
+    cfg.sync_cb = sntp_sync_cb;
+    if (esp_netif_sntp_init(&cfg) == ESP_OK) {
         s_sntp_initialized = true;
-    }
-    if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(wait_ms)) == ESP_OK) {
-        s_time_synced = true;
-        ESP_LOGI(TAG, "SNTP time synced");
     } else {
-        ESP_LOGW(TAG, "SNTP sync timeout (%d ms), time not ready yet", wait_ms);
+        ESP_LOGE(TAG, "SNTP init failed");
     }
 }
 
 static esp_err_t do_fetch(void)
 {
-    /* 时间未同步时每次刷新都再试 NTP(首次等待常超时) */
-    if (!s_time_synced) sntp_try_sync(SNTP_WAIT_MS);
+    /* 时间未同步时确保 SNTP 已在后台运行,不再阻塞等待 */
+    sntp_ensure();
 
     esp_err_t err = usage_api_fetch(&s_quota);
     uint64_t now_ms = esp_timer_get_time() / 1000;
@@ -86,7 +85,7 @@ static void refresh_from_touch(void)
         do_fetch();
     } else if (wifi_app_init(20000) == ESP_OK) {
         usage_ui_splash_status("数据获取中...");
-        sntp_try_sync(SNTP_WAIT_MS);
+        sntp_ensure();
         do_fetch();
     } else {
         usage_ui_set_error("连接失败");
@@ -127,9 +126,8 @@ void app_main(void)
     if (werr != ESP_OK) {
         usage_ui_set_error("连接失败");
     } else {
-        usage_ui_splash_status("时间获取中...");
-        sntp_try_sync(SNTP_WAIT_MS);
         usage_ui_splash_status("数据获取中...");
+        sntp_ensure(); /* SNTP 后台同步,时间就绪后由主循环补显 */
         do_fetch();
     }
 
@@ -147,6 +145,19 @@ void app_main(void)
         if ((now_ms - last_tick_ms) >= 1000) {
             last_tick_ms = now_ms;
             usage_ui_tick(now_ms);
+
+            /* SNTP 后台同步成功后,补一次时间显示(首次启动不再阻塞等待) */
+            if (s_time_synced && !s_time_ui_updated) {
+                s_time_ui_updated = true;
+                time_t t = time(NULL);
+                if (t > 1000000000LL) {
+                    struct tm tmv;
+                    localtime_r(&t, &tmv);
+                    char buf[32];
+                    snprintf(buf, sizeof(buf), "更新于 %02d:%02d", tmv.tm_hour, tmv.tm_min);
+                    usage_ui_set_time(buf);
+                }
+            }
         }
 
         /* 自动定时刷新(CONFIG_OPENCODE_REFRESH_MINUTES,0 表示关闭) */
@@ -190,7 +201,7 @@ void app_main(void)
             last_try_ms = now_ms;
             if (wifi_app_init(20000) == ESP_OK) {
                 usage_ui_splash_status("数据获取中...");
-                sntp_try_sync(SNTP_WAIT_MS);
+                sntp_ensure();
                 do_fetch();
             }
         }

@@ -174,6 +174,10 @@ static bool parse_bucket(cJSON *obj, const char *name, usage_bucket_t *b)
             b->resets_in = d > 0 ? (int)d : 0;
         }
     }
+    /* 系统时间未同步(SNTP)时,重置倒计时无意义,统一隐藏 */
+    if (time(NULL) <= 1000000000LL) {
+        b->resets_in = -1;
+    }
     return true;
 }
 
