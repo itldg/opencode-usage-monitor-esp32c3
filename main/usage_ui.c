@@ -25,7 +25,7 @@ extern const lv_font_t lv_font_zh40;
 #define BAR_H        16
 #define RESET_Y_OFF  32
 #define RIGHT_OFF    -8     /* 右侧留白,百分比/金额与之对齐 */
-#define ANALYSIS_Y   46
+#define ANALYSIS_Y   56     /* 三行文字块高165,在标题栏(38)与屏底(240)间居中 */
 #define ANALYSIS_H   63
 
 /* 配色方案(深海军蓝 + 冰蓝/薄荷绿点缀,暗背景下高对比) */
@@ -204,7 +204,8 @@ static void make_header(lv_obj_t *page, const char *title, lv_obj_t **title_labe
 static void make_analysis_row(int idx, int y)
 {
     if (idx < 2) {
-        make_divider(s_page1, 8, y + ANALYSIS_H - 5, SCR_W - 16);
+        /* 分割线位于本行 burn 底(y+39)与下一行 budget 顶(y+63)的正中间 */
+        make_divider(s_page1, 8, y + ANALYSIS_H - 12, SCR_W - 16);
     }
 
     lv_obj_t *budget = lv_label_create(s_page1);
