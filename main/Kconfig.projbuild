@@ -28,4 +28,30 @@ menu "OpenCode Go Usage Display"
         help
             WiFi 连接失败后的重试次数(每次间隔 3 秒)。
 
+    config OPENCODE_SOUND_ENABLE
+        bool "Enable sound alerts (ES8311 + NS4150B)"
+        default y
+        help
+            用量达到档位/手动刷新/开机时播放 TTS 提示音(ES8311 + NS4150B)。
+            关闭后不初始化音频外设,省电。
+
+    config OPENCODE_I2S_MCLK_PIN
+        int "I2S MCLK GPIO"
+        default 10
+    config OPENCODE_I2S_BCLK_PIN
+        int "I2S BCLK GPIO"
+        default 8
+    config OPENCODE_I2S_WS_PIN
+        int "I2S WS GPIO"
+        default 12
+    config OPENCODE_I2S_DOUT_PIN
+        int "I2S DOUT GPIO"
+        default 11
+    config OPENCODE_AUDIO_PA_PIN
+        int "NS4150B PA enable GPIO"
+        default 13
+        help
+            ES8311 输出接 NS4150B 功放,此引脚高电平开启功放(低电平关闭)。
+            实战派 ESP32-C3 板上接 GPIO13。
+
 endmenu

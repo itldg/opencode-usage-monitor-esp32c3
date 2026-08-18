@@ -55,6 +55,13 @@ static esp_err_t ft6336_read_register(uint8_t reg, uint8_t *buf, size_t len)
     return i2c_master_transmit_receive(s_dev, &reg, 1, buf, len, 50);
 }
 
+esp_err_t touch_i2c_bus_handle(i2c_master_bus_handle_t *out)
+{
+    if (!out) return ESP_ERR_INVALID_ARG;
+    *out = s_bus;
+    return s_bus ? ESP_OK : ESP_ERR_INVALID_STATE;
+}
+
 esp_err_t touch_ft6336_read(touch_point_t *pt)
 {
     pt->pressed = false;

@@ -11,6 +11,7 @@
 #include "lvgl.h"
 #include "nvs_flash.h"
 
+#include "audio_player.h"
 #include "lcd_init.h"
 #include "usage_api.h"
 #include "usage_ui.h"
@@ -58,6 +59,7 @@ static esp_err_t do_fetch(void)
     esp_err_t err = usage_api_fetch(&s_quota);
     uint64_t now_ms = esp_timer_get_time() / 1000;
     if (err == ESP_OK) {
+        audio_player_report(&s_quota); /* 用量档位播报(30/50/.../100%) + 窗口重置提示 */
         usage_ui_update(&s_quota, now_ms);
         usage_ui_set_error(NULL);
         char buf[32];
@@ -116,6 +118,10 @@ void app_main(void)
     ESP_ERROR_CHECK(lcd_init());
     usage_ui_create();
     usage_ui_splash_status("WIFI连接中...");
+
+    if (audio_player_init() == ESP_OK) {
+        audio_player_play(AUDIO_BOOT); /* 开机提示音 */
+    }
 
     esp_err_t werr = wifi_app_init(30000 + CONFIG_OPENCODE_WIFI_RETRY_COUNT * 3000);
     if (werr != ESP_OK) {
