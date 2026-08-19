@@ -249,20 +249,28 @@ void audio_player_report(const usage_quota_t *q)
         const usage_bucket_t *bk = b[i];
         if (!bk->valid || bk->percent < 0) continue;
 
-        char ep_key[4], pl_key[4];
+        char ep_key[4], pl_key[4], pc_key[4];
         snprintf(ep_key, sizeof(ep_key), "ep%d", i + 1);
         snprintf(pl_key, sizeof(pl_key), "pl%d", i + 1);
+        snprintf(pc_key, sizeof(pc_key), "pc%d", i + 1);
 
-        /* 窗口重置(接口返回新的 resetsAt):已播档位清零,重新开始;首次记录不播 */
+        /* 窗口重置(接口返回新的 resetsAt):已播档位清零,重新开始。
+           "额度已刷新"仅在上次刷新有真实用量(percent>0)而本次清零(percent==0)
+           时播报;一直 0% 未使用则静默。 */
         int64_t last_epoch = 0;
         nvs_get_i64(h, ep_key, &last_epoch);
+        uint8_t last_pct = 0;
+        nvs_get_u8(h, pc_key, &last_pct); /* 上次刷新记录的用量 */
         if (bk->resets_at_epoch > 0 && last_epoch != bk->resets_at_epoch) {
             bool first_seen = (last_epoch == 0);
             nvs_set_i64(h, ep_key, bk->resets_at_epoch);
             nvs_set_u8(h, pl_key, 0);
             nvs_commit(h);
-            if (!first_seen) reset_played = true;
+            if (!first_seen && last_pct > 0 && bk->percent == 0) reset_played = true;
         }
+        /* 记录本次用量,供下次判断是否从"有"清零为 0 */
+        nvs_set_u8(h, pc_key, (uint8_t)(bk->percent > 0 ? bk->percent : 0));
+        nvs_commit(h);
 
         int tier = -1;
         for (int t = 0; t < 6; t++) {
