@@ -72,6 +72,7 @@ static bool     s_resets_known[3];
 static uint64_t s_fetch_ms;
 static usage_quota_t s_quota_snapshot;
 static int s_current_page;
+static bool s_usd = false; /* 金额货币:false=¥人民币,true=$美元 */
 
 static const char *s_names[3] = { "滚动", "每周", "每月" };
 
@@ -93,13 +94,14 @@ static void fmt_reset(char *buf, size_t len, int secs, bool known)
     else            snprintf(buf, len, "重置于 %d 分钟", m);
 }
 
-/* 已用金额:美元额度 × 百分比 × 汇率,人民币展示 */
+/* 已用金额:美元额度 × 百分比(¥ 再 × 汇率) */
 static void fmt_amount(char *buf, size_t len, int idx, int pct)
 {
-    if (pct < 0) { snprintf(buf, len, "¥--"); return; }
-    double cny = usage_api_limit(idx) * (pct / 100.0) * USD_CNY_RATE;
-    if (cny >= 100.0) snprintf(buf, len, "¥%.0f", cny);
-    else              snprintf(buf, len, "¥%.1f", cny);
+    if (pct < 0) { snprintf(buf, len, s_usd ? "$--" : "¥--"); return; }
+    double usd = usage_api_limit(idx) * (pct / 100.0);
+    double amt = s_usd ? usd : usd * USD_CNY_RATE;
+    if (amt >= 100.0) snprintf(buf, len, s_usd ? "$%.0f" : "¥%.0f", amt);
+    else              snprintf(buf, len, s_usd ? "$%.1f" : "¥%.1f", amt);
 }
 
 static void fmt_short_duration(char *buf, size_t len, int hours)
@@ -256,18 +258,21 @@ static void update_analysis_labels(void)
         char available[32];
         char reset_text[32];
         const char *name = s_names[i];
+        const char *sym = s_usd ? "$" : "¥";
+        const char *unit = i == 0 ? "时" : "天";
 
         if (!a->valid) {
-            snprintf(budget, sizeof(budget), "%s 预算 ¥ --", name);
+            snprintf(budget, sizeof(budget), "%s 预算 %s --", name, sym);
         } else {
-            double value = (a->budget_per_day ? a->budget_usd * 24.0 : a->budget_usd) * USD_CNY_RATE;
-            snprintf(budget, sizeof(budget), "%s %s ¥ %.1f", name,
-                     a->budget_per_day ? "日均" : "时均", value);
+            double usd = a->budget_per_day ? a->budget_usd * 24.0 : a->budget_usd;
+            double value = s_usd ? usd : usd * USD_CNY_RATE;
+            snprintf(budget, sizeof(budget), "%s %s %s %.1f", name,
+                     a->budget_per_day ? "日均" : "时均", sym, value);
         }
         lv_label_set_text(s_analysis_budget[i], budget);
 
         if (!a->valid || a->reset_hours < 0) {
-            snprintf(burn, sizeof(burn), i == 0 ? "燃烧 ¥ -- /时" : "燃烧 ¥ -- /天");
+            snprintf(burn, sizeof(burn), "燃烧 %s -- /%s", sym, unit);
             snprintf(available, sizeof(available), "可用 --");
             snprintf(reset_text, sizeof(reset_text), "距重置 --");
         } else {
@@ -276,12 +281,14 @@ static void update_analysis_labels(void)
             if (a->burn_usd_h >= 0 && a->cap_hours >= 0) {
                 int cap = (int)(a->cap_hours + 0.5);
                 fmt_short_duration(capbuf, sizeof(capbuf), cap);
-                double burn_cny = a->burn_usd_h * USD_CNY_RATE;
-                snprintf(burn, sizeof(burn), i == 0 ? "燃烧 ¥ %.1f /时" : "燃烧 ¥ %.1f /天",
-                         i == 0 ? burn_cny : burn_cny * 24.0);
+                double burn_usd = a->burn_usd_h;
+                double burn_val = s_usd
+                                  ? (i == 0 ? burn_usd : burn_usd * 24.0)
+                                  : (i == 0 ? burn_usd * USD_CNY_RATE : burn_usd * USD_CNY_RATE * 24.0);
+                snprintf(burn, sizeof(burn), "燃烧 %s %.1f /%s", sym, burn_val, unit);
                 snprintf(available, sizeof(available), "可用%s", capbuf);
             } else {
-                snprintf(burn, sizeof(burn), i == 0 ? "燃烧 ¥ -- /时" : "燃烧 ¥ -- /天");
+                snprintf(burn, sizeof(burn), "燃烧 %s -- /%s", sym, unit);
                 snprintf(available, sizeof(available), "可用 --");
             }
             snprintf(reset_text, sizeof(reset_text), "距重置%s", resetbuf);
@@ -498,4 +505,40 @@ void usage_ui_switch_page(int page)
 int usage_ui_current_page(void)
 {
     return s_current_page;
+}
+
+static bool hit_test(lv_obj_t *obj, int x, int y)
+{
+    lv_area_t a;
+    lv_obj_get_coords(obj, &a);
+    return x >= a.x1 && x <= a.x2 && y >= a.y1 && y <= a.y2;
+}
+
+/* 依据快照刷新用量页三个已用金额(货币切换后重绘) */
+static void refresh_amount_labels(void)
+{
+    for (int i = 0; i < 3; i++) {
+        const usage_bucket_t *b = i == 0 ? &s_quota_snapshot.rolling
+                                : (i == 1 ? &s_quota_snapshot.weekly : &s_quota_snapshot.monthly);
+        int pct = b->valid ? b->percent : -1;
+        if (pct > 100) pct = 100;
+        char abuf[24];
+        fmt_amount(abuf, sizeof(abuf), i, pct);
+        lv_label_set_text(s_amount_labels[i], abuf);
+    }
+}
+
+/* 点击任一金额标签:切换人民币/美元,并重绘本页金额 */
+void usage_ui_handle_tap(int x, int y)
+{
+    for (int i = 0; i < 3; i++) {
+        if ((s_amount_labels[i] && hit_test(s_amount_labels[i], x, y)) ||
+            (s_analysis_budget[i] && hit_test(s_analysis_budget[i], x, y)) ||
+            (s_analysis_burn[i] && hit_test(s_analysis_burn[i], x, y))) {
+            s_usd = !s_usd;
+            refresh_amount_labels();
+            update_analysis_labels();
+            return;
+        }
+    }
 }

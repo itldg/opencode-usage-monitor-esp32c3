@@ -55,6 +55,9 @@ void usage_ui_switch_page(int page);
 /** 当前页:0=用量总览 1=用量分析 */
 int usage_ui_current_page(void);
 
+/** 点击金额标签:切换人民币/美元显示 */
+void usage_ui_handle_tap(int x, int y);
+
 #ifdef __cplusplus
 }
 #endif

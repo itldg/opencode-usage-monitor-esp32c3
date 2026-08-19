@@ -191,6 +191,9 @@ void app_main(void)
                            && (now_ms - last_touch_ms) >= TOUCH_DEBOUNCE_MS) {
                     last_touch_ms = now_ms;
                     refresh_from_touch();
+                } else if (abs_dx < 40 && abs_dy < 40) {
+                    /* 轻点:命中金额标签则切换货币 */
+                    usage_ui_handle_tap(point.x, point.y);
                 }
             }
         }
