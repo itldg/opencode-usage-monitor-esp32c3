@@ -28,6 +28,8 @@ static EventGroupHandle_t s_event_group;
         if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_START) {
             esp_wifi_connect();
         } else if (base == WIFI_EVENT && event_id == WIFI_EVENT_STA_DISCONNECTED) {
+            /* 断开即视为掉线,否则 is_connected 永远返回 true,永不触发主循环重连 */
+            xEventGroupClearBits(s_event_group, WIFI_CONNECTED_BIT);
             if (s_retry_num < CONFIG_OPENCODE_WIFI_RETRY_COUNT) {
                 s_retry_num++;
                 ESP_LOGW(TAG, "retry %d/%d", s_retry_num, CONFIG_OPENCODE_WIFI_RETRY_COUNT);
