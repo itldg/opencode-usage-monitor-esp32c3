@@ -12,18 +12,24 @@
 #include "nvs_flash.h"
 
 #include "audio_player.h"
+#include "config_store.h"
 #include "lcd_init.h"
 #include "usage_api.h"
 #include "usage_ui.h"
+#include "volc_usage_api.h"
+#include "web_config.h"
 #include "wifi_app.h"
 
 #define TAG "main"
 
 #define LOOP_DELAY_MS          5
-#define TOUCH_DEBOUNCE_MS      5000   /* 触摸触发刷新后的防抖 */
+#define TOUCH_DEBOUNCE_MS      5000   /* 下拉刷新防抖 */
+#define SWITCH_DEBOUNCE_MS     1000   /* 上滑切换数据源防抖 */
 #define WIFI_RETRY_PERIOD_MS   60000  /* WiFi 未连接时的自动重试周期 */
 
 static usage_quota_t s_quota;
+static volc_quota_t  s_volc_coding;
+static volc_quota_t  s_volc_agent;
 static bool s_time_synced = false;
 static bool s_sntp_initialized = false;
 static bool s_time_ui_updated = false;
@@ -50,46 +56,96 @@ static void sntp_ensure(void)
     }
 }
 
+/* 按当前时间刷新"更新于"标签(SNTP 未同步时显示 --:--) */
+static void update_time_label(void)
+{
+    char buf[32];
+    time_t t = time(NULL);
+    if (s_time_synced && t > 1000000000LL) {
+        struct tm tmv;
+        localtime_r(&t, &tmv);
+        snprintf(buf, sizeof(buf), "更新于 %02d:%02d", tmv.tm_hour, tmv.tm_min);
+    } else {
+        snprintf(buf, sizeof(buf), "更新于 --:--");
+    }
+    usage_ui_set_time(buf);
+}
+
 static esp_err_t do_fetch(void)
 {
-    /* 时间未同步时确保 SNTP 已在后台运行,不再阻塞等待 */
+    /* 时间未同步时确保 SNTP 已在后台运行 */
     sntp_ensure();
 
-    esp_err_t err = usage_api_fetch(&s_quota);
-    uint64_t now_ms = esp_timer_get_time() / 1000;
-    if (err == ESP_OK) {
-        audio_player_report(&s_quota); /* 用量档位播报(30/50/.../100%) + 窗口重置提示 */
-        usage_ui_update(&s_quota, now_ms);
-        usage_ui_set_error(NULL);
-        char buf[32];
-        time_t t = time(NULL);
-        if (s_time_synced && t > 1000000000LL) {
-            struct tm tmv;
-            localtime_r(&t, &tmv);
-            snprintf(buf, sizeof(buf), "更新于 %02d:%02d", tmv.tm_hour, tmv.tm_min);
-        } else {
-            snprintf(buf, sizeof(buf), "更新于 --:--");
+    /* HTTPS 证书校验需要正确时间:冷启动时钟为 1970,SNTP 未同步时
+     * TLS 握手会因证书有效期校验失败;先等同步(最多 ~10s)再拉取。 */
+    if (time(NULL) <= 1000000000LL) {
+        for (int i = 0; i < 50 && !s_time_synced; i++) {
+            vTaskDelay(pdMS_TO_TICKS(200));
         }
-        usage_ui_set_time(buf);
-        ESP_LOGI(TAG, "UI refreshed");
-    } else {
-        usage_ui_set_error("获取失败");
     }
-    return err;
+
+    uint64_t now_ms = esp_timer_get_time() / 1000;
+    bool any = false;
+
+    if (config_store_opencode_enabled()) {
+        if (usage_api_fetch(&s_quota) == ESP_OK) {
+            any = true;
+            audio_player_report(&s_quota); /* 用量档位播报(30/50/.../100%) + 窗口重置提示 */
+            usage_ui_update(&s_quota, now_ms);
+        } else {
+            ESP_LOGW(TAG, "opencode fetch failed");
+            usage_ui_set_error("获取失败");
+        }
+    }
+
+    if (config_store_volc_enabled()) {
+        int plan = config_store_volc_plan();
+        if (plan == VOLC_PLAN_CODING || plan == VOLC_PLAN_BOTH) {
+            if (volc_api_fetch(&s_volc_coding) == ESP_OK) {
+                any = true;
+                audio_player_report_volc(&s_volc_coding, 0); /* Coding 档位播报 */
+                usage_ui_update_volc(UI_SRC_VOLC, &s_volc_coding, now_ms);
+            } else {
+                ESP_LOGW(TAG, "volc coding fetch failed");
+                if (!any) usage_ui_set_error("Volc失败");
+            }
+        }
+        if (plan == VOLC_PLAN_AGENT || plan == VOLC_PLAN_BOTH) {
+            if (volc_api_fetch_agent(&s_volc_agent) == ESP_OK) {
+                any = true;
+                audio_player_report_volc(&s_volc_agent, 1); /* Agent 档位播报 */
+                usage_ui_update_volc(UI_SRC_VOLC_AGENT, &s_volc_agent, now_ms);
+            } else {
+                ESP_LOGW(TAG, "volc agent fetch failed");
+                if (!any) usage_ui_set_error("Agent失败");
+            }
+        }
+    }
+
+    if (any) {
+        usage_ui_set_error(NULL);
+        update_time_label();
+        ESP_LOGI(TAG, "UI refreshed");
+    }
+    return any ? ESP_OK : ESP_FAIL;
+}
+
+/* 连接 WiFi(若未连)后拉取一次用量 */
+static void fetch_ensure_connected(void)
+{
+    usage_ui_splash_status("数据获取中...");
+    if (!wifi_app_is_connected() && wifi_app_init(20000) != ESP_OK) {
+        usage_ui_set_error("连接失败");
+        return;
+    }
+    sntp_ensure();
+    do_fetch();
 }
 
 static void refresh_from_touch(void)
 {
     usage_ui_refresh_begin();
-    if (wifi_app_is_connected()) {
-        do_fetch();
-    } else if (wifi_app_init(20000) == ESP_OK) {
-        usage_ui_splash_status("数据获取中...");
-        sntp_ensure();
-        do_fetch();
-    } else {
-        usage_ui_set_error("连接失败");
-    }
+    fetch_ensure_connected();
     usage_ui_refresh_end();
 }
 
@@ -107,19 +163,29 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(nvs);
 
-    if (strlen(CONFIG_OPENCODE_API_KEY) == 0) {
-        ESP_LOGW(TAG, "API key is empty! Run menuconfig -> OpenCode Go Usage Display");
-    }
+    config_store_init();
+
     if (strlen(CONFIG_OPENCODE_WIFI_SSID) == 0) {
         ESP_LOGW(TAG, "WiFi SSID is empty! Run menuconfig -> OpenCode Go Usage Display");
+    }
+    if (!config_store_opencode_enabled() && !config_store_volc_enabled()) {
+        ESP_LOGW(TAG, "no data source configured! Configure via http://<IP>/");
     }
 
     ESP_ERROR_CHECK(lcd_init());
     usage_ui_create();
     usage_ui_splash_status("WIFI连接中...");
 
+    web_config_start(); /* 网页配置服务器(http://<设备IP>/),连上 WiFi 即可访问 */
+
     if (audio_player_init() == ESP_OK) {
         audio_player_play(AUDIO_BOOT); /* 开机提示音 */
+    }
+
+    /* 默认数据源:未配置 OpenCode 时,按 Plan 类型选火山 Coding/Agent */
+    if (!config_store_opencode_enabled() && config_store_volc_enabled()) {
+        usage_ui_set_source(config_store_volc_plan() == VOLC_PLAN_AGENT
+                                ? UI_SRC_VOLC_AGENT : UI_SRC_VOLC);
     }
 
     esp_err_t werr = wifi_app_init(30000 + CONFIG_OPENCODE_WIFI_RETRY_COUNT * 3000);
@@ -129,11 +195,18 @@ void app_main(void)
         usage_ui_splash_status("数据获取中...");
         sntp_ensure(); /* SNTP 后台同步,时间就绪后由主循环补显 */
         do_fetch();
+        /* 未配置任何数据源:提示访问网页配置页 */
+        if (!config_store_opencode_enabled() && !config_store_volc_enabled()) {
+            char hint[48];
+            snprintf(hint, sizeof(hint), "Config at http://%s/", web_config_ip_str());
+            usage_ui_splash_status(hint);
+        }
     }
 
     uint64_t refresh_ms = (uint64_t)CONFIG_OPENCODE_REFRESH_MINUTES * 60 * 1000;
     uint64_t last_auto_ms = 0;
     uint64_t last_touch_ms = 0;
+    uint64_t last_switch_ms = 0;
     uint64_t last_try_ms = 0;
     uint64_t last_tick_ms = 0;
 
@@ -149,14 +222,7 @@ void app_main(void)
             /* SNTP 后台同步成功后,补一次时间显示(首次启动不再阻塞等待) */
             if (s_time_synced && !s_time_ui_updated) {
                 s_time_ui_updated = true;
-                time_t t = time(NULL);
-                if (t > 1000000000LL) {
-                    struct tm tmv;
-                    localtime_r(&t, &tmv);
-                    char buf[32];
-                    snprintf(buf, sizeof(buf), "更新于 %02d:%02d", tmv.tm_hour, tmv.tm_min);
-                    usage_ui_set_time(buf);
-                }
+                update_time_label();
             }
         }
 
@@ -166,6 +232,11 @@ void app_main(void)
             if (wifi_app_is_connected()) {
                 do_fetch();
             }
+        }
+
+        /* 网页保存配置后立即刷新一次用量 */
+        if (web_config_take_refresh()) {
+            fetch_ensure_connected();
         }
 
         /* 任意横向滑动切页;仅主页下拉触发刷新。 */
@@ -187,26 +258,29 @@ void app_main(void)
 
                 if (abs_dx >= 40 && abs_dx > abs_dy) {
                     usage_ui_switch_page(1 - usage_ui_current_page());
-                } else if (usage_ui_current_page() == 0 && dy >= 40 && abs_dy > abs_dx
-                           && (now_ms - last_touch_ms) >= TOUCH_DEBOUNCE_MS) {
-                    last_touch_ms = now_ms;
-                    refresh_from_touch();
+                } else if (usage_ui_current_page() == 0 && abs_dy > abs_dx && abs_dy >= 40) {
+                    if (dy < 0) {
+                        /* 上滑:循环切换数据源(Plan),防抖 1s */
+                        if ((now_ms - last_switch_ms) >= SWITCH_DEBOUNCE_MS) {
+                            last_switch_ms = now_ms;
+                            usage_ui_cycle_source();
+                        }
+                    } else if ((now_ms - last_touch_ms) >= TOUCH_DEBOUNCE_MS) {
+                        /* 下拉:刷新 */
+                        last_touch_ms = now_ms;
+                        refresh_from_touch();
+                    }
                 } else if (abs_dx < 40 && abs_dy < 40) {
                     /* 轻点:命中金额标签则切换货币 */
                     usage_ui_handle_tap(point.x, point.y);
                 }
             }
         }
-        (void)lcd_touch_activity_take();
 
         /* WiFi 断开后定时自动重连重试 */
         if (!wifi_app_is_connected() && (now_ms - last_try_ms) >= WIFI_RETRY_PERIOD_MS) {
             last_try_ms = now_ms;
-            if (wifi_app_init(20000) == ESP_OK) {
-                usage_ui_splash_status("数据获取中...");
-                sntp_ensure();
-                do_fetch();
-            }
+            fetch_ensure_connected();
         }
 
         vTaskDelay(pdMS_TO_TICKS(LOOP_DELAY_MS));

@@ -2,7 +2,9 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
+#include "config_store.h"
 #include "esp_log.h"
 #include "lvgl.h"
 
@@ -13,43 +15,44 @@ extern const lv_font_t lv_font_zh16;
 extern const lv_font_t lv_font_zh40;
 
 /* 布局常量 */
-#define SCR_W        320
-#define TITLE_H      38     /* 标题栏高度(单独背景色) */
-#define TITLE_X      10
-#define TITLE_Y      11
-#define ROW_START_Y  53     /* 标题栏下方开始(内容顶距标题栏 15px) */
-#define ROW_H        62     /* 三行垂直居中:三行内容(顶~重置底)+两条空隙占满 38~240,上下各留 15px */
-#define NAME_X       8
-#define BAR_X        48
-#define BAR_W        210
-#define BAR_H        16
-#define RESET_Y_OFF  32
-#define RIGHT_OFF    -8     /* 右侧留白,百分比/金额与之对齐 */
-#define ANALYSIS_Y   56     /* 三行文字块高165,在标题栏(38)与屏底(240)间居中 */
-#define ANALYSIS_H   63
+#define SCR_W 320
+#define TITLE_H 38 /* 标题栏高度(单独背景色) */
+#define TITLE_X 10
+#define TITLE_Y 11
+#define ROW_START_Y 53 /* 标题栏下方开始(内容顶距标题栏 15px) */
+#define ROW_H 62       /* 三行垂直居中:三行内容(顶~重置底)+两条空隙占满 38~240,上下各留 15px */
+#define NAME_X 8
+#define BAR_X 48
+#define BAR_W 210
+#define BAR_H 16
+#define RESET_Y_OFF 32
+#define RIGHT_OFF -8  /* 右侧留白,百分比/金额与之对齐 */
+#define ANALYSIS_Y 56 /* 三行文字块高165,在标题栏(38)与屏底(240)间居中 */
+#define ANALYSIS_H 63
 
 /* 配色方案(深海军蓝 + 冰蓝/薄荷绿点缀,暗背景下高对比) */
-#define COLOR_BG       0x0B1220   /* 背景:深海军蓝 */
-#define COLOR_HEADER   0x16233D   /* 标题栏:略亮深蓝,与背景区分 */
-#define COLOR_TITLE    0xFFFFFF   /* 标题:纯白 */
-#define COLOR_NAME     0x8FCBFF   /* 行名:冰蓝 */
-#define COLOR_PCT      0xFFFFFF   /* 百分比:纯白 */
-#define COLOR_SUB      0x9DB2CC   /* 辅助信息:灰蓝(时间/重置) */
-#define COLOR_AMOUNT   0x3EFFB0   /* 金额:薄荷绿 */
-#define COLOR_TRACK    0x2E4058   /* 进度条轨道:调亮,未填充部分可见 */
-#define COLOR_TRACK_B  0x44607E   /* 进度条轨道边框 */
-#define COLOR_DIV      0x2A3A52   /* 行间分隔线 */
-#define COLOR_ERR      0xFF5C5C   /* 错误:亮红 */
+#define COLOR_BG 0x0B1220      /* 背景:深海军蓝 */
+#define COLOR_HEADER 0x16233D  /* 标题栏:略亮深蓝,与背景区分 */
+#define COLOR_TITLE 0xFFFFFF   /* 标题:纯白 */
+#define COLOR_NAME 0x8FCBFF    /* 行名:冰蓝 */
+#define COLOR_PCT 0xFFFFFF     /* 百分比:纯白 */
+#define COLOR_SUB 0x9DB2CC     /* 辅助信息:灰蓝(时间/重置) */
+#define COLOR_AMOUNT 0x3EFFB0  /* 金额:薄荷绿 */
+#define COLOR_TRACK 0x2E4058   /* 进度条轨道:调亮,未填充部分可见 */
+#define COLOR_TRACK_B 0x44607E /* 进度条轨道边框 */
+#define COLOR_DIV 0x2A3A52     /* 行间分隔线 */
+#define COLOR_ERR 0xFF5C5C     /* 错误:亮红 */
 
-#define BAND_GREEN     0x00E585
-#define BAND_ORANGE    0xFF9F0A
-#define BAND_RED       0xFF3B30
-#define COLOR_WARNING  0xFFB020
+#define BAND_GREEN 0x00E585
+#define BAND_ORANGE 0xFF9F0A
+#define BAND_RED 0xFF3B30
+#define COLOR_WARNING 0xFFB020
 
 /* 汇率:1 美元 ≈ 7 元(可随行情调整) */
-#define USD_CNY_RATE  7.0f
+#define USD_CNY_RATE 7.0f
 
 static lv_obj_t *s_bars[3];
+static lv_obj_t *s_name_labels[3];
 static lv_obj_t *s_pct_labels[3];
 static lv_obj_t *s_reset_labels[3];
 static lv_obj_t *s_amount_labels[3];
@@ -58,6 +61,7 @@ static lv_obj_t *s_analysis_burn[3];
 static lv_obj_t *s_analysis_available[3];
 static lv_obj_t *s_analysis_reset[3];
 static lv_obj_t *s_analysis_verdict[3];
+static lv_obj_t *s_analysis_div[2]; /* 分析页行间分隔线 */
 static lv_obj_t *s_title;
 static lv_obj_t *s_time;
 static lv_obj_t *s_err;
@@ -67,50 +71,94 @@ static lv_obj_t *s_refresh_overlay;
 static lv_obj_t *s_page0;
 static lv_obj_t *s_page1;
 
-static int      s_resets_in[3];
-static bool     s_resets_known[3];
+static int s_resets_in[3];
+static bool s_resets_known[3];
+static int s_volc_resets_in[2][3]; /* [0]=Coding [1]=Agent */
+static bool s_volc_resets_known[2][3];
 static uint64_t s_fetch_ms;
 static usage_quota_t s_quota_snapshot;
+static volc_quota_t s_volc_snapshot[2]; /* [0]=Coding [1]=Agent */
 static int s_current_page;
+static int s_src = UI_SRC_OPENCODE;
 static bool s_usd = false; /* 金额货币:false=¥人民币,true=$美元 */
 
-static const char *s_names[3] = { "滚动", "每周", "每月" };
+static const char *s_names[3] = {"滚动", "每周", "每月"};
+
+/* 数据源是否启用(火山按配置的 Plan 类型) */
+static bool src_enabled(int src)
+{
+    if (src == UI_SRC_OPENCODE)
+    {
+        return config_store_opencode_enabled();
+    }
+    if (src == UI_SRC_VOLC || src == UI_SRC_VOLC_AGENT)
+    {
+        if (!config_store_volc_enabled())
+            return false;
+        int plan = config_store_volc_plan();
+        if (src == UI_SRC_VOLC)
+            return plan != VOLC_PLAN_AGENT;
+        return plan != VOLC_PLAN_CODING;
+    }
+    return false;
+}
 
 static lv_color_t band_color(int percent)
 {
-    if (percent < 50) return lv_color_hex(BAND_GREEN);
-    if (percent <= 90) return lv_color_hex(BAND_ORANGE);
+    if (percent < 50)
+        return lv_color_hex(BAND_GREEN);
+    if (percent <= 90)
+        return lv_color_hex(BAND_ORANGE);
     return lv_color_hex(BAND_RED);
 }
 
 /* 重置倒计时文本:≥1天 "重置于 X 天 Y 小时",≥1时 "重置于 X 小时 Y 分钟",否则 "重置于 X 分钟" */
 static void fmt_reset(char *buf, size_t len, int secs, bool known)
 {
-    if (!known) { snprintf(buf, len, "重置于 --"); return; }
-    if (secs <= 0) { snprintf(buf, len, "即将重置"); return; }
+    if (!known)
+    {
+        snprintf(buf, len, "重置于 --");
+        return;
+    }
+    if (secs <= 0)
+    {
+        snprintf(buf, len, "即将重置");
+        return;
+    }
     int d = secs / 86400, h = (secs % 86400) / 3600, m = (secs % 3600) / 60;
-    if (d > 0)      snprintf(buf, len, "重置于 %d 天 %d 小时", d, h);
-    else if (h > 0) snprintf(buf, len, "重置于 %d 小时 %d 分钟", h, m);
-    else            snprintf(buf, len, "重置于 %d 分钟", m);
+    if (d > 0)
+        snprintf(buf, len, "重置于 %d 天 %d 小时", d, h);
+    else if (h > 0)
+        snprintf(buf, len, "重置于 %d 小时 %d 分钟", h, m);
+    else
+        snprintf(buf, len, "重置于 %d 分钟", m);
 }
 
 /* 已用金额:美元额度 × 百分比(¥ 再 × 汇率) */
 static void fmt_amount(char *buf, size_t len, int idx, int pct)
 {
-    if (pct < 0) { snprintf(buf, len, s_usd ? "$--" : "¥--"); return; }
+    if (pct < 0)
+    {
+        snprintf(buf, len, s_usd ? "$--" : "¥--");
+        return;
+    }
     double usd = usage_api_limit(idx) * (pct / 100.0);
     double amt = s_usd ? usd : usd * USD_CNY_RATE;
-    if (amt >= 100.0) snprintf(buf, len, s_usd ? "$%.0f" : "¥%.0f", amt);
-    else              snprintf(buf, len, s_usd ? "$%.1f" : "¥%.1f", amt);
+    if (amt >= 100.0)
+        snprintf(buf, len, s_usd ? "$%.0f" : "¥%.0f", amt);
+    else
+        snprintf(buf, len, s_usd ? "$%.1f" : "¥%.1f", amt);
 }
 
 static void fmt_short_duration(char *buf, size_t len, int hours)
 {
-    if (hours >= 24) snprintf(buf, len, " %d 天", hours / 24);
-    else             snprintf(buf, len, " %d 小时", hours);
+    if (hours >= 24)
+        snprintf(buf, len, " %d 天", hours / 24);
+    else
+        snprintf(buf, len, " %d 小时", hours);
 }
 
-static void make_divider(lv_obj_t *parent, int x, int y, int w)
+static lv_obj_t *make_divider(lv_obj_t *parent, int x, int y, int w)
 {
     lv_obj_t *div = lv_obj_create(parent);
     lv_obj_set_size(div, w, 1);
@@ -119,6 +167,7 @@ static void make_divider(lv_obj_t *parent, int x, int y, int w)
     lv_obj_set_style_border_width(div, 0, 0);
     lv_obj_set_style_pad_all(div, 0, 0);
     lv_obj_set_style_radius(div, 0, 0);
+    return div;
 }
 
 static lv_obj_t *make_page(lv_obj_t *parent)
@@ -138,8 +187,9 @@ static lv_obj_t *make_page(lv_obj_t *parent)
 static void make_row(int idx, int y, bool draw_divider)
 {
     /* 行间分隔线(浅横线,位于本行底部) */
-    if (draw_divider) {
-        make_divider(s_page0, NAME_X, y + ROW_H - 7, SCR_W - 2 * NAME_X);  /* 本行内容底(y+48)与下一行顶(y+62)正中 */
+    if (draw_divider)
+    {
+        make_divider(s_page0, NAME_X, y + ROW_H - 7, SCR_W - 2 * NAME_X); /* 本行内容底(y+48)与下一行顶(y+62)正中 */
     }
 
     /* 名称标签 */
@@ -148,6 +198,7 @@ static void make_row(int idx, int y, bool draw_divider)
     lv_obj_set_style_text_font(lbl, &lv_font_zh16, 0);
     lv_obj_set_pos(lbl, NAME_X, y);
     lv_label_set_text(lbl, s_names[idx]);
+    s_name_labels[idx] = lbl;
 
     /* 进度条 */
     lv_obj_t *bar = lv_bar_create(s_page0);
@@ -205,9 +256,10 @@ static void make_header(lv_obj_t *page, const char *title, lv_obj_t **title_labe
 
 static void make_analysis_row(int idx, int y)
 {
-    if (idx < 2) {
+    if (idx < 2)
+    {
         /* 分割线位于本行 burn 底(y+39)与下一行 budget 顶(y+63)的正中间 */
-        make_divider(s_page1, 8, y + ANALYSIS_H - 12, SCR_W - 16);
+        s_analysis_div[idx] = make_divider(s_page1, 8, y + ANALYSIS_H - 12, SCR_W - 16);
     }
 
     lv_obj_t *budget = lv_label_create(s_page1);
@@ -246,10 +298,116 @@ static void make_analysis_row(int idx, int y)
     s_analysis_verdict[idx] = verdict;
 }
 
+/* 火山分析(无金额):按百分比与燃烧速率估算剩余可用时间 */
+static void update_volc_analysis_labels(void)
+{
+    /* 窗口时长(小时):滚动5h/每周/每月 */
+    static const double win_h[3] = {5.0, 168.0, 720.0};
+    static const char *names[3] = {"滚动", "每周", "每月"};
+    int pi = (s_src == UI_SRC_VOLC_AGENT) ? 1 : 0;
+
+    for (int i = 0; i < 3; i++)
+    {
+        const volc_bucket_t *b = i == 0 ? &s_volc_snapshot[pi].session
+                                : (i == 1 ? &s_volc_snapshot[pi].weekly : &s_volc_snapshot[pi].monthly);
+        int pct = b->valid ? b->percent : -1;
+        double reset_h = -1, burn = -1, cap = -1;
+
+        if (b->valid && b->resets_in >= 0)
+        {
+            reset_h = b->resets_in / 3600.0;
+            /* 有订阅起点(Agent 响应带 SubscribeTime)时用真实已过时间,
+             * 否则按窗口时长近似(刚开通时近似值为 0,算不出速率)。 */
+            double elapsed;
+            int64_t now_s = (int64_t)time(NULL);
+            if (b->subscribe_at_epoch > 0 && now_s > b->subscribe_at_epoch)
+                elapsed = (now_s - b->subscribe_at_epoch) / 3600.0;
+            else
+                elapsed = win_h[i] - reset_h;
+            if (pct == 0)
+                burn = 0;
+            else if (elapsed > 0)
+                burn = pct / elapsed; /* 消耗 %/小时 */
+            if (pct >= 100)
+                cap = 0;
+            else if (burn > 1e-5)
+                cap = (100.0 - pct) / burn; /* 按当前速率还能用多久 */
+            else
+                cap = reset_h; /* 速率未知(刚重置):按能撑到窗口重置计 */
+        }
+
+        /* 三色判定:0安全 1注意 2危险 */
+        int verdict = 0;
+        if (!b->valid)
+            verdict = -1;
+        else if (pct >= 100)
+            verdict = 2;
+        else if (cap >= 0 && reset_h >= 0 && cap < reset_h)
+            verdict = 2; /* 会先撞限 */
+        else if (pct >= 90)
+            verdict = 2;
+        else if (pct >= 50)
+            verdict = 1;
+
+        char budget[48], burn_t[48], capbuf[16], resetbuf[16], avail[32], rst[32];
+        if (!b->valid || pct < 0)
+        {
+            snprintf(budget, sizeof(budget), "%s 用量 --", names[i]);
+            snprintf(burn_t, sizeof(burn_t), "燃烧 -- %%/时");
+            snprintf(avail, sizeof(avail), "还能用 --");
+            snprintf(rst, sizeof(rst), "距重置 --");
+        }
+        else
+        {
+            snprintf(budget, sizeof(budget), "%s 用量 %d%%", names[i], pct);
+            int reset = (int)(reset_h + 0.5);
+            fmt_short_duration(resetbuf, sizeof(resetbuf), reset);
+            if (cap >= 0)
+            {
+                int c = (int)(cap + 0.5);
+                fmt_short_duration(capbuf, sizeof(capbuf), c);
+                snprintf(avail, sizeof(avail), "还能用%s", capbuf);
+            }
+            else
+            {
+                snprintf(avail, sizeof(avail), "还能用 --");
+            }
+            if (burn >= 0)
+                snprintf(burn_t, sizeof(burn_t), "燃烧 %.1f %%/时", burn);
+            else
+                snprintf(burn_t, sizeof(burn_t), "燃烧 -- %%/时");
+            snprintf(rst, sizeof(rst), "距重置%s", resetbuf);
+        }
+        lv_label_set_text(s_analysis_budget[i], budget);
+        lv_label_set_text(s_analysis_burn[i], burn_t);
+        lv_label_set_text(s_analysis_available[i], avail);
+        lv_label_set_text(s_analysis_reset[i], rst);
+        lv_obj_align(s_analysis_available[i], LV_ALIGN_TOP_RIGHT, -8, ANALYSIS_Y + i * ANALYSIS_H);
+        lv_obj_align(s_analysis_reset[i], LV_ALIGN_TOP_RIGHT, -8, ANALYSIS_Y + i * ANALYSIS_H + 23);
+
+        const char *text = !b->valid ? "未知"
+                           : (verdict == 2 ? "即将超限"
+                              : (verdict == 1 ? "勉强够用" : "余量充足"));
+        lv_color_t color = !b->valid ? lv_color_hex(COLOR_DIV)
+                           : (verdict == 2 ? lv_color_hex(BAND_RED)
+                              : (verdict == 1 ? lv_color_hex(COLOR_WARNING)
+                                              : lv_color_hex(BAND_GREEN)));
+        lv_obj_set_style_text_color(s_analysis_verdict[i], color, 0);
+        lv_label_set_text(s_analysis_verdict[i], text);
+        lv_obj_align(s_analysis_verdict[i], LV_ALIGN_TOP_RIGHT, -122, ANALYSIS_Y + i * ANALYSIS_H);
+    }
+}
+
 static void update_analysis_labels(void)
 {
+    if (s_src != UI_SRC_OPENCODE)
+    {
+        update_volc_analysis_labels();
+        return;
+    }
     usage_analysis_all_t *all = usage_api_analyze(&s_quota_snapshot);
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 3; i++)
+    {
         const usage_analysis_t *a = &all->row[i];
         char budget[48];
         char burn[64];
@@ -261,9 +419,12 @@ static void update_analysis_labels(void)
         const char *sym = s_usd ? "$" : "¥";
         const char *unit = i == 0 ? "时" : "天";
 
-        if (!a->valid) {
+        if (!a->valid)
+        {
             snprintf(budget, sizeof(budget), "%s 预算 %s --", name, sym);
-        } else {
+        }
+        else
+        {
             double usd = a->budget_per_day ? a->budget_usd * 24.0 : a->budget_usd;
             double value = s_usd ? usd : usd * USD_CNY_RATE;
             snprintf(budget, sizeof(budget), "%s %s %s %.1f", name,
@@ -271,23 +432,29 @@ static void update_analysis_labels(void)
         }
         lv_label_set_text(s_analysis_budget[i], budget);
 
-        if (!a->valid || a->reset_hours < 0) {
+        if (!a->valid || a->reset_hours < 0)
+        {
             snprintf(burn, sizeof(burn), "燃烧 %s -- /%s", sym, unit);
             snprintf(available, sizeof(available), "可用 --");
             snprintf(reset_text, sizeof(reset_text), "距重置 --");
-        } else {
+        }
+        else
+        {
             int reset = (int)(a->reset_hours + 0.5);
             fmt_short_duration(resetbuf, sizeof(resetbuf), reset);
-            if (a->burn_usd_h >= 0 && a->cap_hours >= 0) {
+            if (a->burn_usd_h >= 0 && a->cap_hours >= 0)
+            {
                 int cap = (int)(a->cap_hours + 0.5);
                 fmt_short_duration(capbuf, sizeof(capbuf), cap);
                 double burn_usd = a->burn_usd_h;
                 double burn_val = s_usd
-                                  ? (i == 0 ? burn_usd : burn_usd * 24.0)
-                                  : (i == 0 ? burn_usd * USD_CNY_RATE : burn_usd * USD_CNY_RATE * 24.0);
+                                      ? (i == 0 ? burn_usd : burn_usd * 24.0)
+                                      : (i == 0 ? burn_usd * USD_CNY_RATE : burn_usd * USD_CNY_RATE * 24.0);
                 snprintf(burn, sizeof(burn), "燃烧 %s %.1f /%s", sym, burn_val, unit);
                 snprintf(available, sizeof(available), "可用%s", capbuf);
-            } else {
+            }
+            else
+            {
                 snprintf(burn, sizeof(burn), "燃烧 %s -- /%s", sym, unit);
                 snprintf(available, sizeof(available), "可用 --");
             }
@@ -299,16 +466,14 @@ static void update_analysis_labels(void)
         lv_obj_align(s_analysis_available[i], LV_ALIGN_TOP_RIGHT, -8, ANALYSIS_Y + i * ANALYSIS_H);
         lv_obj_align(s_analysis_reset[i], LV_ALIGN_TOP_RIGHT, -8, ANALYSIS_Y + i * ANALYSIS_H + 23);
 
-        const char *text = !a->valid ? "未知" : (a->overspent ? "已超支"
-                           : (a->verdict == 2 ? "即将超限"
-                           : (a->verdict == 1 ? "勉强够用" : "余量充足")));
+        const char *text = !a->valid ? "未知" : (a->overspent ? "已超支" : (a->verdict == 2 ? "即将超限" : (a->verdict == 1 ? "勉强够用" : "余量充足")));
         lv_color_t color = !a->valid ? lv_color_hex(COLOR_DIV)
-                         : (a->verdict == 2 ? lv_color_hex(BAND_RED)
-                         : (a->verdict == 1 ? lv_color_hex(COLOR_WARNING)
-                                            : lv_color_hex(BAND_GREEN)));
+                                     : (a->verdict == 2 ? lv_color_hex(BAND_RED)
+                                                        : (a->verdict == 1 ? lv_color_hex(COLOR_WARNING)
+                                                                           : lv_color_hex(BAND_GREEN)));
         lv_obj_set_style_text_color(s_analysis_verdict[i], color, 0);
         lv_label_set_text(s_analysis_verdict[i], text);
-        lv_obj_align(s_analysis_verdict[i], LV_ALIGN_TOP_RIGHT, -104, ANALYSIS_Y + i * ANALYSIS_H);
+        lv_obj_align(s_analysis_verdict[i], LV_ALIGN_TOP_RIGHT, -122, ANALYSIS_Y + i * ANALYSIS_H);
     }
 }
 
@@ -342,7 +507,8 @@ void usage_ui_create(void)
     lv_label_set_text(s_err, "");
 
     /* 三行(前两行底部画分隔线,最后一行不画) */
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 3; i++)
+    {
         make_row(i, ROW_START_Y + i * ROW_H, i < 2);
         s_resets_in[i] = -1;
         s_resets_known[i] = false;
@@ -350,9 +516,19 @@ void usage_ui_create(void)
 
     lv_obj_t *analysis_title;
     make_header(s_page1, "用量分析", &analysis_title);
-    for (int i = 0; i < 3; i++) make_analysis_row(i, ANALYSIS_Y + i * ANALYSIS_H);
+    for (int i = 0; i < 3; i++)
+        make_analysis_row(i, ANALYSIS_Y + i * ANALYSIS_H);
 
     s_current_page = 0;
+
+    for (int p = 0; p < 2; p++)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            s_volc_resets_in[p][i] = -1;
+            s_volc_resets_known[p][i] = false;
+        }
+    }
 
     /* 开机画面:覆盖主界面,大标题 "IT老大哥" + 状态小字,首次数据到达后隐藏 */
     s_splash = make_page(scr);
@@ -372,11 +548,74 @@ void usage_ui_create(void)
     ESP_LOGI(TAG, "UI created (zh font)");
 }
 
+/* 依据当前数据源快照刷新三行进度条/百分比/倒计时/金额 */
+static void refresh_rows(void)
+{
+    for (int i = 0; i < 3; i++)
+    {
+        lv_label_set_text(s_name_labels[i], s_names[i]);
+
+        int pct = -1, reset_in = -1;
+        bool known = false;
+        if (s_src == UI_SRC_OPENCODE)
+        {
+            const usage_bucket_t *b = i == 0 ? &s_quota_snapshot.rolling
+                                             : (i == 1 ? &s_quota_snapshot.weekly : &s_quota_snapshot.monthly);
+            pct = b->valid ? b->percent : -1;
+            reset_in = b->resets_in;
+            known = b->valid && b->resets_in >= 0;
+        }
+        else
+        {
+            int pi = (s_src == UI_SRC_VOLC_AGENT) ? 1 : 0;
+            const volc_bucket_t *b = i == 0 ? &s_volc_snapshot[pi].session
+                                            : (i == 1 ? &s_volc_snapshot[pi].weekly : &s_volc_snapshot[pi].monthly);
+            pct = b->valid ? b->percent : -1;
+            reset_in = b->resets_in;
+            known = b->valid && b->resets_in >= 0;
+        }
+
+        char buf[16];
+        if (pct < 0)
+        {
+            snprintf(buf, sizeof(buf), "--%%");
+            lv_bar_set_value(s_bars[i], 0, LV_ANIM_OFF);
+        }
+        else
+        {
+            if (pct > 100)
+                pct = 100;
+            snprintf(buf, sizeof(buf), "%d%%", pct);
+            lv_obj_set_style_bg_color(s_bars[i], band_color(pct), LV_PART_INDICATOR);
+            lv_bar_set_value(s_bars[i], pct, LV_ANIM_OFF);
+        }
+        lv_label_set_text(s_pct_labels[i], buf);
+
+        char rbuf[40];
+        fmt_reset(rbuf, sizeof(rbuf), reset_in, known);
+        lv_label_set_text(s_reset_labels[i], rbuf);
+
+        /* 火山无金额换算数据,金额位置显示 "--" */
+        char abuf[24];
+        if (s_src == UI_SRC_OPENCODE)
+        {
+            fmt_amount(abuf, sizeof(abuf), i, pct);
+        }
+        else
+        {
+            snprintf(abuf, sizeof(abuf), "--");
+        }
+        lv_label_set_text(s_amount_labels[i], abuf);
+    }
+    update_analysis_labels();
+}
+
 void usage_ui_update(const usage_quota_t *quota, uint64_t now_uptime_ms)
 {
-    const usage_bucket_t *buckets[3] = { &quota->rolling, &quota->weekly, &quota->monthly };
+    const usage_bucket_t *buckets[3] = {&quota->rolling, &quota->weekly, &quota->monthly};
 
-    if (s_splash) {           /* 首次成功获取数据,关闭开机画面 */
+    if (s_splash)
+    { /* 首次成功获取数据,关闭开机画面 */
         lv_obj_del(s_splash);
         s_splash = NULL;
         s_splash_status = NULL;
@@ -384,63 +623,133 @@ void usage_ui_update(const usage_quota_t *quota, uint64_t now_uptime_ms)
 
     s_fetch_ms = now_uptime_ms;
     memcpy(&s_quota_snapshot, quota, sizeof(s_quota_snapshot));
-    for (int i = 0; i < 3; i++) {
-        const usage_bucket_t *b = buckets[i];
-        char buf[16];
-        int pct = b->valid ? b->percent : -1;
-        if (pct < 0) {
-            snprintf(buf, sizeof(buf), "--%%");
-            lv_bar_set_value(s_bars[i], 0, LV_ANIM_OFF);
-        } else {
-            if (pct > 100) pct = 100;
-            snprintf(buf, sizeof(buf), "%d%%", pct);
-            lv_obj_set_style_bg_color(s_bars[i], band_color(pct), LV_PART_INDICATOR);
-            lv_bar_set_value(s_bars[i], pct, LV_ANIM_ON);
-        }
-        lv_label_set_text(s_pct_labels[i], buf);
-
-        s_resets_in[i] = b->resets_in;
-        s_resets_known[i] = b->valid && b->resets_in >= 0;
-        char rbuf[40];
-        fmt_reset(rbuf, sizeof(rbuf), s_resets_in[i], s_resets_known[i]);
-        lv_label_set_text(s_reset_labels[i], rbuf);
-
-        char abuf[24];
-        fmt_amount(abuf, sizeof(abuf), i, pct);
-        lv_label_set_text(s_amount_labels[i], abuf);
+    for (int i = 0; i < 3; i++)
+    {
+        s_resets_in[i] = buckets[i]->resets_in;
+        s_resets_known[i] = buckets[i]->valid && buckets[i]->resets_in >= 0;
     }
 
-    update_analysis_labels();
+    if (s_src == UI_SRC_OPENCODE)
+    {
+        refresh_rows();
+    }
+}
+
+void usage_ui_update_volc(int src, const volc_quota_t *quota, uint64_t now_uptime_ms)
+{
+    int pi = (src == UI_SRC_VOLC_AGENT) ? 1 : 0;
+    const volc_bucket_t *buckets[3] = {&quota->session, &quota->weekly, &quota->monthly};
+
+    if (s_splash)
+    { /* 首次成功获取数据,关闭开机画面 */
+        lv_obj_del(s_splash);
+        s_splash = NULL;
+        s_splash_status = NULL;
+    }
+
+    s_fetch_ms = now_uptime_ms;
+    memcpy(&s_volc_snapshot[pi], quota, sizeof(volc_quota_t));
+    for (int i = 0; i < 3; i++)
+    {
+        s_volc_resets_in[pi][i] = buckets[i]->resets_in;
+        s_volc_resets_known[pi][i] = buckets[i]->valid && buckets[i]->resets_in >= 0;
+    }
+
+    if (s_src == src)
+    {
+        refresh_rows();
+    }
+}
+
+void usage_ui_set_source(int src)
+{
+    if (src < UI_SRC_OPENCODE || src > UI_SRC_VOLC_AGENT)
+        return;
+
+    s_src = src;
+    const char *title = src == UI_SRC_OPENCODE ? "OpenCode Go 用量"
+                        : src == UI_SRC_VOLC   ? "Volcengine Coding 用量"
+                                               : "Volcengine Agent 用量";
+    lv_label_set_text(s_title, title);
+    refresh_rows();
+}
+
+static int usage_ui_current_source(void)
+{
+    return s_src;
+}
+
+void usage_ui_cycle_source(void)
+{
+    int cur = usage_ui_current_source();
+    for (int k = 1; k <= 3; k++)
+    {
+        int cand = (cur + k) % 3;
+        if (src_enabled(cand))
+        {
+            usage_ui_set_source(cand);
+            return;
+        }
+    }
 }
 
 void usage_ui_tick(uint64_t now_uptime_ms)
 {
     uint64_t elapsed = (now_uptime_ms >= s_fetch_ms) ? (now_uptime_ms - s_fetch_ms) : 0;
-    for (int i = 0; i < 3; i++) {
-        if (!s_resets_known[i]) continue;
-        int64_t remain = (int64_t)s_resets_in[i] - (int64_t)(elapsed / 1000);
-        if (remain < 0) remain = 0;
-        char rbuf[40];
-        fmt_reset(rbuf, sizeof(rbuf), (int)remain, true);
-        lv_label_set_text(s_reset_labels[i], rbuf);
 
-        usage_bucket_t *snapshot = i == 0 ? &s_quota_snapshot.rolling
-                                  : (i == 1 ? &s_quota_snapshot.weekly : &s_quota_snapshot.monthly);
-        snapshot->resets_in = (int)remain;
+    if (s_src == UI_SRC_OPENCODE)
+    {
+        for (int i = 0; i < 3; i++)
+        {
+            if (!s_resets_known[i])
+                continue;
+            int64_t remain = (int64_t)s_resets_in[i] - (int64_t)(elapsed / 1000);
+            if (remain < 0)
+                remain = 0;
+            char rbuf[40];
+            fmt_reset(rbuf, sizeof(rbuf), (int)remain, true);
+            lv_label_set_text(s_reset_labels[i], rbuf);
+
+            usage_bucket_t *snapshot = i == 0 ? &s_quota_snapshot.rolling
+                                              : (i == 1 ? &s_quota_snapshot.weekly : &s_quota_snapshot.monthly);
+            snapshot->resets_in = (int)remain;
+        }
+        update_analysis_labels();
     }
-    update_analysis_labels();
+    else
+    {
+        int pi = (s_src == UI_SRC_VOLC_AGENT) ? 1 : 0;
+        for (int i = 0; i < 3; i++)
+        {
+            if (!s_volc_resets_known[pi][i])
+                continue;
+            int64_t remain = (int64_t)s_volc_resets_in[pi][i] - (int64_t)(elapsed / 1000);
+            if (remain < 0)
+                remain = 0;
+            char rbuf[40];
+            fmt_reset(rbuf, sizeof(rbuf), (int)remain, true);
+            lv_label_set_text(s_reset_labels[i], rbuf);
+
+            volc_bucket_t *snap = i == 0 ? &s_volc_snapshot[pi].session
+                                 : (i == 1 ? &s_volc_snapshot[pi].weekly : &s_volc_snapshot[pi].monthly);
+            snap->resets_in = (int)remain;
+        }
+        update_analysis_labels();
+    }
 }
 
 void usage_ui_set_time(const char *text)
 {
-    if (s_time) {
+    if (s_time)
+    {
         lv_label_set_text(s_time, text ? text : "更新于 --:--");
     }
 }
 
 void usage_ui_splash_status(const char *text)
 {
-    if (s_splash && s_splash_status) {
+    if (s_splash && s_splash_status)
+    {
         lv_label_set_text(s_splash_status, text ? text : "");
         lv_refr_now(NULL);
     }
@@ -449,17 +758,20 @@ void usage_ui_splash_status(const char *text)
 void usage_ui_set_error(const char *text)
 {
     /* 开机画面期间:错误也显示在状态行,否则用户看不到(被遮挡) */
-    if (s_splash && s_splash_status) {
+    if (s_splash && s_splash_status)
+    {
         lv_label_set_text(s_splash_status, text ? text : "连接中...");
     }
-    if (s_err) {
+    if (s_err)
+    {
         lv_label_set_text(s_err, text ? text : "");
     }
 }
 
 void usage_ui_refresh_begin(void)
 {
-    if (s_refresh_overlay) return;
+    if (s_refresh_overlay)
+        return;
 
     s_refresh_overlay = lv_obj_create(lv_scr_act());
     lv_obj_set_size(s_refresh_overlay, SCR_W, 240);
@@ -488,14 +800,16 @@ void usage_ui_refresh_begin(void)
 
 void usage_ui_refresh_end(void)
 {
-    if (!s_refresh_overlay) return;
+    if (!s_refresh_overlay)
+        return;
     lv_obj_del(s_refresh_overlay);
     s_refresh_overlay = NULL;
 }
 
 void usage_ui_switch_page(int page)
 {
-    if (page < 0 || page > 1 || page == s_current_page || !s_page0 || !s_page1) return;
+    if (page < 0 || page > 1 || page == s_current_page || !s_page0 || !s_page1)
+        return;
 
     s_current_page = page;
     lv_obj_set_x(s_page0, page == 0 ? 0 : -SCR_W);
@@ -517,24 +831,38 @@ static bool hit_test(lv_obj_t *obj, int x, int y)
 /* 依据快照刷新用量页三个已用金额(货币切换后重绘) */
 static void refresh_amount_labels(void)
 {
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 3; i++)
+    {
         const usage_bucket_t *b = i == 0 ? &s_quota_snapshot.rolling
-                                : (i == 1 ? &s_quota_snapshot.weekly : &s_quota_snapshot.monthly);
+                                         : (i == 1 ? &s_quota_snapshot.weekly : &s_quota_snapshot.monthly);
         int pct = b->valid ? b->percent : -1;
-        if (pct > 100) pct = 100;
+        if (pct > 100)
+            pct = 100;
         char abuf[24];
         fmt_amount(abuf, sizeof(abuf), i, pct);
         lv_label_set_text(s_amount_labels[i], abuf);
     }
 }
 
-/* 点击任一金额标签:切换人民币/美元,并重绘本页金额 */
+/* 轻点处理:点标题循环切换启用的数据源;点金额标签切换人民币/美元(仅 OpenCode) */
 void usage_ui_handle_tap(int x, int y)
 {
-    for (int i = 0; i < 3; i++) {
+    /* 标题栏左侧区域:循环切换到下一个启用的数据源 */
+    if (s_current_page == 0 && y >= 0 && y <= TITLE_H && x >= 0 && x <= 170)
+    {
+        usage_ui_cycle_source();
+        return;
+    }
+
+    if (s_src != UI_SRC_OPENCODE)
+        return; /* 火山无金额,金额点击无意义 */
+
+    for (int i = 0; i < 3; i++)
+    {
         if ((s_amount_labels[i] && hit_test(s_amount_labels[i], x, y)) ||
             (s_analysis_budget[i] && hit_test(s_analysis_budget[i], x, y)) ||
-            (s_analysis_burn[i] && hit_test(s_analysis_burn[i], x, y))) {
+            (s_analysis_burn[i] && hit_test(s_analysis_burn[i], x, y)))
+        {
             s_usd = !s_usd;
             refresh_amount_labels();
             update_analysis_labels();

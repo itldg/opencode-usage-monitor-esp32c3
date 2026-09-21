@@ -6,6 +6,7 @@
 #include <time.h>
 
 #include "cJSON.h"
+#include "config_store.h"
 #include "esp_crt_bundle.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
@@ -143,11 +144,6 @@ static bool parse_bucket(cJSON *obj, const char *name, usage_bucket_t *b)
     b->resets_at_epoch = -1;
     b->resets_in = -1;
 
-    cJSON *status = cJSON_GetObjectItem(bucket, "status");
-    if (cJSON_IsString(status)) {
-        snprintf(b->status, sizeof(b->status), "%s", status->valuestring);
-    }
-
     cJSON *p = cJSON_GetObjectItem(bucket, "percent");
     if (cJSON_IsNumber(p)) {
         b->percent = p->valueint;
@@ -200,18 +196,25 @@ esp_err_t usage_api_fetch(usage_quota_t *out)
 {
     memset(out, 0, sizeof(*out));
 
+    const char *key = config_store_opencode_key();
+    if (!key || !*key) {
+        ESP_LOGE(TAG, "opencode api key not configured");
+        return ESP_FAIL;
+    }
+
     s_http_len = 0;
     memset(s_http_buf, 0, sizeof(s_http_buf));
 
-    char auth_header[128];
-    snprintf(auth_header, sizeof(auth_header), "Bearer %s", CONFIG_OPENCODE_API_KEY);
+    char auth_header[320];
+    snprintf(auth_header, sizeof(auth_header), "Bearer %s", key);
 
     esp_http_client_config_t cfg = {
         .url = USAGE_URL,
         .method = HTTP_METHOD_GET,
         .event_handler = http_event_handler,
         .crt_bundle_attach = esp_crt_bundle_attach,
-                .timeout_ms = 15000,
+        .buffer_size_tx = 2048,
+        .timeout_ms = 15000,
     };
     esp_http_client_handle_t client = esp_http_client_init(&cfg);
     if (!client) {
@@ -246,13 +249,5 @@ esp_err_t usage_api_fetch(usage_quota_t *out)
     }
     ESP_LOGI(TAG, "rolling=%d%% weekly=%d%% monthly=%d%%",
              out->rolling.percent, out->weekly.percent, out->monthly.percent);
-        return ESP_OK;
-}
-
-void usage_api_dump_raw(char *dst, size_t len)
-{
-    if (len == 0) return;
-    size_t n = s_http_len < (int)(len - 1) ? (size_t)s_http_len : len - 1;
-    memcpy(dst, s_http_buf, n);
-    dst[n] = '\0';
+    return ESP_OK;
 }

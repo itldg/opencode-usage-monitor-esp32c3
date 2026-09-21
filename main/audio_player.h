@@ -2,6 +2,7 @@
 
 #include "esp_err.h"
 #include "usage_api.h"
+#include "volc_usage_api.h"
 
 /* 音频 ID,顺序与 tools/pack_audio.py 打包顺序一致 */
 enum {
@@ -10,6 +11,9 @@ enum {
     AUDIO_1_30, AUDIO_1_50, AUDIO_1_70, AUDIO_1_85, AUDIO_1_95, AUDIO_1_100,  /* 滚动窗口 */
     AUDIO_2_30, AUDIO_2_50, AUDIO_2_70, AUDIO_2_85, AUDIO_2_95, AUDIO_2_100,  /* 周窗口 */
     AUDIO_3_30, AUDIO_3_50, AUDIO_3_70, AUDIO_3_85, AUDIO_3_95, AUDIO_3_100,  /* 月窗口 */
+    AUDIO_OPENCODE,    /* opencode.wav:OpenCode Plan 播报前缀 */
+    AUDIO_VOLC_AGENT,  /* volcengine_agent.wav:Agent Plan 播报前缀 */
+    AUDIO_VOLC_CODING, /* volcengine_coding.wav:Coding Plan 播报前缀 */
     AUDIO_COUNT
 };
 
@@ -27,3 +31,9 @@ void audio_player_play(int id);
  * 已播档位存 NVS,重启不重播;窗口重置(resetsAt 变化)后重新开始并播 reset.wav。
  */
 void audio_player_report(const usage_quota_t *q);
+
+/**
+ * @brief 火山用量档位播报,复用同一套提示音。
+ * @param plan 0=Coding 1=Agent;NVS 已播记录与 OpenCode 相互独立。
+ */
+void audio_player_report_volc(const volc_quota_t *q, int plan);

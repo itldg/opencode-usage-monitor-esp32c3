@@ -12,7 +12,6 @@ extern "C" {
 /* 单档(rolling/weekly/monthly)用量 */
 typedef struct {
     bool     valid;      /* 该档数据有效 */
-    char     status[16]; /* ok / warn / ... */
     int      percent;    /* 已用百分比 0..100 */
     int64_t  resets_at_epoch; /* resetsAt 解析为 UTC epoch 秒;-1 表示无法解析 */
     int      resets_in;   /* 调用时刻距重置的剩余秒数;-1 表示未知 */
@@ -31,9 +30,6 @@ typedef struct {
  * @return ESP_OK 表示 HTTP 请求成功且 JSON 至少解析出一个有效档
  */
 esp_err_t usage_api_fetch(usage_quota_t *out);
-
-/** 内部暴露供调试:原始响应文本复制到 dst */
-void usage_api_dump_raw(char *dst, size_t len);
 
 /* ---- 用量分析(第二页) ---- */
 typedef struct {

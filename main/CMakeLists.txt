@@ -6,6 +6,9 @@ idf_component_register(
         "wifi_app.c"
         "usage_api.c"
         "usage_ui.c"
+        "volc_usage_api.c"
+        "config_store.c"
+        "web_config.c"
         "audio_player.c"
         "lv_font_zh16.c"
         "lv_font_zh40.c"
@@ -22,6 +25,8 @@ idf_component_register(
         esp_driver_ledc
         esp_timer
         esp_http_client
+        esp_http_server
+        esp_hw_support
         esp-tls
         mbedtls
         json

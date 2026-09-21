@@ -33,14 +33,6 @@
 
 static lv_disp_drv_t s_disp_drv;   /* must outlive io_config creation */
 static lv_indev_drv_t s_indev_drv;
-static bool s_touch_active = false;
-
-bool lcd_touch_activity_take(void)
-{
-    bool active = s_touch_active;
-    s_touch_active = false;
-    return active;
-}
 
 static bool lcd_notify_flush_ready(esp_lcd_panel_io_handle_t panel_io,
                                    esp_lcd_panel_io_event_data_t *edata,
@@ -66,8 +58,7 @@ static void lcd_lvgl_touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         data->point.x = pt.x;
         data->point.y = pt.y;
         data->state = LV_INDEV_STATE_PRESSED;
-            s_touch_active = true;
-        }
+    }
 }
 
 static void lcd_lvgl_tick_cb(void *arg)

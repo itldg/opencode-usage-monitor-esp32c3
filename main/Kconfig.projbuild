@@ -1,12 +1,13 @@
 menu "OpenCode Go Usage Display"
 
-    config OPENCODE_API_KEY
-        string "OpenCode Go API Key"
+    config OPENCODE_WEB_PASSWORD
+        string "Web config page password"
+        default ""
         help
-            OpenCode Go 套餐的 API Key。
-            可从本机 opencode 的 auth.json 中获取:
-                %USERPROFILE%\.local\share\opencode\auth.json
-            其中 "opencode-go" 配置项的 "key" 字段即为该值。
+            网页配置页( http://<设备IP>/ )的登录密码。
+            留空则不校验:打开网页即可直接查看/修改配置;
+            非空时需输入此密码登录后才能查看/修改。
+            OpenCode API Key 与火山 Cookie 均在网页配置页设置(存 NVS)。
 
     config OPENCODE_WIFI_SSID
         string "WiFi SSID"

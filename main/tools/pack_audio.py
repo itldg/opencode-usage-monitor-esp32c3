@@ -5,7 +5,8 @@
 头部:magic "AUDI"(u32) + version(u16) + count(u16) + reserved(u32)
       然后 count 条 {u32 offset, u32 size, char name[16]}
 文件顺序与 main/audio_player.h 的 AUDIO_* 枚举一致:
-  boot, reset, 1_30..1_100, 2_30..2_100, 3_30..3_100
+  boot, reset, 1_30..1_100, 2_30..2_100, 3_30..3_100,
+  opencode, volcengine_agent, volcengine_coding
 """
 
 import os
@@ -14,7 +15,7 @@ import sys
 
 FILES = ["boot", "reset"] + [
     "%d_%s" % (w, t) for w in (1, 2, 3) for t in ("30", "50", "70", "85", "95", "100")
-]
+] + ["opencode", "volcengine_agent", "volcengine_coding"]
 
 
 def main():

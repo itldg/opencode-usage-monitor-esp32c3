@@ -25,7 +25,7 @@
 #define AUDIO_SAMPLE_RATE 22050
 #define AUDIO_BITS        16
 #define AUDIO_CHUNK       4096 /* 单声道字节/块 */
-#define AUDIO_QUEUE_LEN   4
+#define AUDIO_QUEUE_LEN   8    /* plan 前缀音 + 档位音成对入队 */
 #define AUDIO_PART_LABEL  "audio"
 #define AUDIO_PART_SUBTYPE ((esp_partition_subtype_t)0x40)
 #define CODEC_I2C_ADDR    ES8311_CODEC_DEFAULT_ADDR /* 0x30,8 位地址 */
@@ -237,22 +237,30 @@ void audio_player_play(int id)
     xQueueSend(s_queue, &id, 0); /* 队列满直接丢弃,不阻塞主流程 */
 }
 
-void audio_player_report(const usage_quota_t *q)
-{
-    if (!s_enabled) return;
-    const usage_bucket_t *b[3] = { &q->rolling, &q->weekly, &q->monthly };
+/* 档位播报核心:按窗口(0/1/2)独立记录已播档位与重置时间,避免重复播报。
+ * ke/kl/kc 为 epoch/played/pct 三组 NVS key 前缀(OpenCode 沿用原 "ep"/"pl"/"pc")。
+ * plan_sound 为数据源前缀音(opencode/volcengine_coding/volcengine_agent),
+ * 每次播报档位/重置音前先播,便于区分是哪个 Plan 的用量。 */
+typedef struct {
+    bool valid;
+    int percent;
+    int64_t resets_at_epoch;
+} report_bucket_t;
 
+static void report_tiers(const char *ke, const char *kl, const char *kc,
+                         int plan_sound, const report_bucket_t b[3])
+{
     nvs_handle_t h;
     if (nvs_open("audio", NVS_READWRITE, &h) != ESP_OK) return;
     bool reset_played = false;
     for (int i = 0; i < 3; i++) {
-        const usage_bucket_t *bk = b[i];
+        const report_bucket_t *bk = &b[i];
         if (!bk->valid || bk->percent < 0) continue;
 
-        char ep_key[4], pl_key[4], pc_key[4];
-        snprintf(ep_key, sizeof(ep_key), "ep%d", i + 1);
-        snprintf(pl_key, sizeof(pl_key), "pl%d", i + 1);
-        snprintf(pc_key, sizeof(pc_key), "pc%d", i + 1);
+        char ep_key[8], pl_key[8], pc_key[8];
+        snprintf(ep_key, sizeof(ep_key), "%s%d", ke, i + 1);
+        snprintf(pl_key, sizeof(pl_key), "%s%d", kl, i + 1);
+        snprintf(pc_key, sizeof(pc_key), "%s%d", kc, i + 1);
 
         /* 窗口重置(接口返回新的 resetsAt):已播档位清零,重新开始。
            "额度已刷新"仅在上次刷新有真实用量(percent>0)而本次清零(percent==0)
@@ -265,12 +273,10 @@ void audio_player_report(const usage_quota_t *q)
             bool first_seen = (last_epoch == 0);
             nvs_set_i64(h, ep_key, bk->resets_at_epoch);
             nvs_set_u8(h, pl_key, 0);
-            nvs_commit(h);
             if (!first_seen && last_pct > 0 && bk->percent == 0) reset_played = true;
         }
         /* 记录本次用量,供下次判断是否从"有"清零为 0 */
         nvs_set_u8(h, pc_key, (uint8_t)(bk->percent > 0 ? bk->percent : 0));
-        nvs_commit(h);
 
         int tier = -1;
         for (int t = 0; t < 6; t++) {
@@ -282,10 +288,44 @@ void audio_player_report(const usage_quota_t *q)
         nvs_get_u8(h, pl_key, &played);
         if ((uint8_t)(tier + 1) > played) {
             nvs_set_u8(h, pl_key, tier + 1);
-            nvs_commit(h);
+            audio_player_play(plan_sound);             /* 先播 Plan 名,再播档位音 */
             audio_player_play(AUDIO_1_30 + i * 6 + tier);
         }
     }
+    nvs_commit(h);
     nvs_close(h);
-    if (reset_played) audio_player_play(AUDIO_RESET); /* 额度已重置 */
+    if (reset_played) {
+        audio_player_play(plan_sound);
+        audio_player_play(AUDIO_RESET); /* 额度已重置 */
+    }
+}
+
+void audio_player_report(const usage_quota_t *q)
+{
+    if (!s_enabled) return;
+    const usage_bucket_t *src[3] = { &q->rolling, &q->weekly, &q->monthly };
+    report_bucket_t b[3];
+    for (int i = 0; i < 3; i++) {
+        b[i] = (report_bucket_t){ .valid = src[i]->valid, .percent = src[i]->percent,
+                                  .resets_at_epoch = src[i]->resets_at_epoch };
+    }
+    /* 保持原 NVS key(ep1/pl1/pc1),不打断已播档位记录 */
+    report_tiers("ep", "pl", "pc", AUDIO_OPENCODE, b);
+}
+
+void audio_player_report_volc(const volc_quota_t *q, int plan)
+{
+    if (!s_enabled) return;
+    const volc_bucket_t *src[3] = { &q->session, &q->weekly, &q->monthly };
+    report_bucket_t b[3];
+    for (int i = 0; i < 3; i++) {
+        b[i] = (report_bucket_t){ .valid = src[i]->valid, .percent = src[i]->percent,
+                                  .resets_at_epoch = src[i]->resets_at_epoch };
+    }
+    /* 火山 Coding/Agent 用独立 key 前缀,与 OpenCode 互不干扰 */
+    if (plan == 1) {
+        report_tiers("vae", "val", "vac", AUDIO_VOLC_AGENT, b);
+    } else {
+        report_tiers("vce", "vcl", "vcc", AUDIO_VOLC_CODING, b);
+    }
 }

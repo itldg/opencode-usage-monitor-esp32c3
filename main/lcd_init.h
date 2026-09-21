@@ -18,12 +18,6 @@ extern "C" {
  */
 esp_err_t lcd_init(void);
 
-/**
- * @brief Non-blocking touch activity check (set by LVGL touch handler).
- * @return true once per press, cleared after read
- */
-bool lcd_touch_activity_take(void);
-
 #ifdef __cplusplus
 }
 #endif
