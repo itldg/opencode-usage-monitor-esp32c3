@@ -262,18 +262,24 @@ static void report_tiers(const char *ke, const char *kl, const char *kc,
         snprintf(pl_key, sizeof(pl_key), "%s%d", kl, i + 1);
         snprintf(pc_key, sizeof(pc_key), "%s%d", kc, i + 1);
 
-        /* 窗口重置(接口返回新的 resetsAt):已播档位清零,重新开始。
+        /* 窗口重置(接口返回新的 resetsAt)则已播档位清零、重新开始;
+           接口未给重置时间(agent 未使用时返回 -1)时,以"用量从有变 0"推断已刷新。
            "额度已刷新"仅在上次刷新有真实用量(percent>0)而本次清零(percent==0)
            时播报;一直 0% 未使用则静默。 */
         int64_t last_epoch = 0;
         nvs_get_i64(h, ep_key, &last_epoch);
         uint8_t last_pct = 0;
         nvs_get_u8(h, pc_key, &last_pct); /* 上次刷新记录的用量 */
-        if (bk->resets_at_epoch > 0 && last_epoch != bk->resets_at_epoch) {
-            bool first_seen = (last_epoch == 0);
-            nvs_set_i64(h, ep_key, bk->resets_at_epoch);
+        if (bk->resets_at_epoch > 0) {
+            if (last_epoch != bk->resets_at_epoch) {
+                bool first_seen = (last_epoch == 0);
+                nvs_set_i64(h, ep_key, bk->resets_at_epoch);
+                nvs_set_u8(h, pl_key, 0);
+                if (!first_seen && last_pct > 0 && bk->percent == 0) reset_played = true;
+            }
+        } else if (last_pct > 0 && bk->percent == 0) {
             nvs_set_u8(h, pl_key, 0);
-            if (!first_seen && last_pct > 0 && bk->percent == 0) reset_played = true;
+            reset_played = true;
         }
         /* 记录本次用量,供下次判断是否从"有"清零为 0 */
         nvs_set_u8(h, pc_key, (uint8_t)(bk->percent > 0 ? bk->percent : 0));

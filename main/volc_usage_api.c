@@ -161,7 +161,10 @@ static void parse_agent_quota(cJSON *root, volc_quota_t *out, int64_t now)
         }
 
         volc_bucket_t *b = map[i].slot;
-        double pct = used->valuedouble / quota->valuedouble * 100.0;
+        /* 未使用(Used=-1)按 0 处理 */
+        double used_v = used->valuedouble;
+        if (used_v < 0) used_v = 0;
+        double pct = used_v / quota->valuedouble * 100.0;
         int percent = (int)(pct + 0.5);
         if (percent < 0) percent = 0;
         if (percent > 100) percent = 100;
