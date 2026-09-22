@@ -90,12 +90,11 @@ static void parse_quota(cJSON *root, volc_quota_t *out, int64_t now)
         cJSON *p = cJSON_GetObjectItem(it, "Percent");
         if (!cJSON_IsNumber(p)) continue;
 
-        /* Percent 可能是 0~1 小数或 0~100 整数,归一化为百分比 */
+        /* Percent 本身就是百分比数值(0~100,如 0.2276 表示 0.2276%) */
         double pd = p->valuedouble;
-        if (pd <= 1.0) pd *= 100.0;
-        int percent = (int)(pd + 0.5);
-        if (percent < 0) percent = 0;
-        if (percent > 100) percent = 100;
+        if (pd < 0) pd = 0;
+        if (pd > 100) pd = 100;
+        float percent = (float)pd;
 
         /* ResetTimestamp 可能是秒或毫秒(>1e12 为毫秒) */
         int64_t reset = -1;
@@ -165,9 +164,9 @@ static void parse_agent_quota(cJSON *root, volc_quota_t *out, int64_t now)
         double used_v = used->valuedouble;
         if (used_v < 0) used_v = 0;
         double pct = used_v / quota->valuedouble * 100.0;
-        int percent = (int)(pct + 0.5);
-        if (percent < 0) percent = 0;
-        if (percent > 100) percent = 100;
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        float percent = (float)pct;
 
         /* ResetTime / SubscribeTime 为毫秒时间戳 */
         int64_t reset = -1, subscribe = -1;
@@ -271,7 +270,7 @@ static esp_err_t volc_fetch_url(const char *tag, const char *url, const char *re
         ESP_LOGE(TAG, "[%s] no usable bucket parsed", tag);
         return ESP_FAIL;
     }
-    ESP_LOGI(TAG, "[%s] session=%d%% weekly=%d%% monthly=%d%%",
+    ESP_LOGI(TAG, "[%s] session=%.2f%% weekly=%.2f%% monthly=%.2f%%",
              tag, out->session.percent, out->weekly.percent, out->monthly.percent);
     return ESP_OK;
 }

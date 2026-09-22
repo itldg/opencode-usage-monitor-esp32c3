@@ -12,7 +12,7 @@ extern "C" {
 /* 火山 Coding Plan 单档(session/weekly/monthly)用量 */
 typedef struct {
     bool    valid;            /* 该档数据有效 */
-    int     percent;          /* 已用百分比 0..100 */
+    float   percent;          /* 已用百分比 0..100(接口带小数,保留精度) */
     int64_t resets_at_epoch;  /* 重置时间 UTC epoch 秒;-1 未知 */
     int64_t subscribe_at_epoch; /* 窗口起点 epoch 秒(Agent 响应带 SubscribeTime);-1 未知 */
     int     resets_in;        /* 调用时刻距重置剩余秒数;-1 未知(时间未同步) */

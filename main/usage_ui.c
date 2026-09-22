@@ -310,7 +310,7 @@ static void update_volc_analysis_labels(void)
     {
         const volc_bucket_t *b = i == 0 ? &s_volc_snapshot[pi].session
                                 : (i == 1 ? &s_volc_snapshot[pi].weekly : &s_volc_snapshot[pi].monthly);
-        int pct = b->valid ? b->percent : -1;
+        float pct = b->valid ? b->percent : -1.0f;
         double reset_h = -1, burn = -1, cap = -1;
 
         if (b->valid && b->resets_in >= 0)
@@ -359,7 +359,7 @@ static void update_volc_analysis_labels(void)
         }
         else
         {
-            snprintf(budget, sizeof(budget), "%s 用量 %d%%", names[i], pct);
+            snprintf(budget, sizeof(budget), "%s 用量 %d%%", names[i], (int)(pct + 0.5f));
             int reset = (int)(reset_h + 0.5);
             fmt_short_duration(resetbuf, sizeof(resetbuf), reset);
             if (cap >= 0)
@@ -557,6 +557,7 @@ static void refresh_rows(void)
 
         int pct = -1, reset_in = -1;
         bool known = false;
+        float pctf = -1.0f; /* 火山接口百分比带小数,显示时四舍五入 */
         if (s_src == UI_SRC_OPENCODE)
         {
             const usage_bucket_t *b = i == 0 ? &s_quota_snapshot.rolling
@@ -570,7 +571,8 @@ static void refresh_rows(void)
             int pi = (s_src == UI_SRC_VOLC_AGENT) ? 1 : 0;
             const volc_bucket_t *b = i == 0 ? &s_volc_snapshot[pi].session
                                             : (i == 1 ? &s_volc_snapshot[pi].weekly : &s_volc_snapshot[pi].monthly);
-            pct = b->valid ? b->percent : -1;
+            pctf = b->valid ? b->percent : -1.0f;
+            pct = b->valid ? (int)(pctf + 0.5f) : -1;
             reset_in = b->resets_in;
             known = b->valid && b->resets_in >= 0;
         }

@@ -243,7 +243,7 @@ void audio_player_play(int id)
  * 每次播报档位/重置音前先播,便于区分是哪个 Plan 的用量。 */
 typedef struct {
     bool valid;
-    int percent;
+    float percent; /* 已用百分比 0..100(火山带小数) */
     int64_t resets_at_epoch;
 } report_bucket_t;
 
@@ -282,7 +282,8 @@ static void report_tiers(const char *ke, const char *kl, const char *kc,
             reset_played = true;
         }
         /* 记录本次用量,供下次判断是否从"有"清零为 0 */
-        nvs_set_u8(h, pc_key, (uint8_t)(bk->percent > 0 ? bk->percent : 0));
+        uint8_t cur_pct = (uint8_t)(bk->percent > 0 ? bk->percent + 0.5f : 0);
+        nvs_set_u8(h, pc_key, cur_pct);
 
         int tier = -1;
         for (int t = 0; t < 6; t++) {
